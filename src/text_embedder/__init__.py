@@ -1,0 +1,2 @@
+"""Text Embedder Module."""
+

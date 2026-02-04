@@ -1,0 +1,5 @@
+model_name: "facebook/hubert-base-ls960"  # ou "facebook/wav2vec2-base"
+pooling_method: "mean"  # mean, max, attention
+sample_rate: 16000
+normalize: true
+

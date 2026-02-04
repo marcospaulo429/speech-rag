@@ -1,0 +1,14 @@
+torch>=2.0.0
+transformers>=4.30.0
+torchaudio>=2.0.0
+sentence-transformers>=2.2.0
+faiss-cpu
+numpy
+pandas
+pyyaml
+tqdm
+scipy
+pytest
+pytest-cov
+datasets>=2.14.0
+

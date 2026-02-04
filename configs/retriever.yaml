@@ -1,0 +1,5 @@
+top_k: 5
+similarity_metric: "cosine"
+index_type: "flat"  # flat, ivf, hnsw
+normalize_embeddings: true
+
