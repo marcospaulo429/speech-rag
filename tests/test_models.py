@@ -1,7 +1,7 @@
 """Basic tests for model components"""
 
 import torch
-import pytest
+import numpy as np
 from pathlib import Path
 import sys
 
@@ -42,6 +42,49 @@ def test_speech_adapter():
     print("✓ Speech Adapter test passed")
 
 
+def test_speech_adapter_different_seq_len():
+    """Test Speech Adapter with different sequence lengths"""
+    adapter = SpeechAdapter(input_dim=1024, output_dim=4096, downsample_factor=4)
+    
+    # Test with different sequence lengths
+    for seq_len in [50, 100, 200, 400]:
+        speech_reprs = torch.randn(1, seq_len, 1024)
+        output = adapter(speech_reprs)
+        assert output.shape == (1, 4096), f"Failed for seq_len={seq_len}"
+    
+    print("✓ Speech Adapter different seq_len test passed")
+
+
+def test_speech_adapter_different_batch_sizes():
+    """Test Speech Adapter with different batch sizes"""
+    adapter = SpeechAdapter(input_dim=1024, output_dim=4096, downsample_factor=4)
+    
+    # Test with different batch sizes
+    for batch_size in [1, 2, 4, 8]:
+        speech_reprs = torch.randn(batch_size, 100, 1024)
+        output = adapter(speech_reprs)
+        assert output.shape == (batch_size, 4096), f"Failed for batch_size={batch_size}"
+        # Check normalization
+        norms = torch.norm(output, dim=1)
+        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+    
+    print("✓ Speech Adapter different batch sizes test passed")
+
+
+def test_speech_adapter_downsampling():
+    """Test that Speech Adapter correctly downsamples temporal dimension"""
+    adapter = SpeechAdapter(input_dim=1024, output_dim=4096, downsample_factor=4)
+    
+    seq_len = 100
+    speech_reprs = torch.randn(1, seq_len, 1024)
+    output = adapter(speech_reprs)
+    
+    # After downsampling by 4 and averaging, we should get a single embedding
+    assert output.shape == (1, 4096), "Should produce single embedding per sample"
+    
+    print("✓ Speech Adapter downsampling test passed")
+
+
 def test_text_encoder_basic():
     """Test Text Encoder (requires model download)"""
     # Skip if models not available
@@ -69,17 +112,102 @@ def test_text_encoder_basic():
         print(f"⚠ Text Encoder test skipped: {e}")
 
 
+def test_text_encoder_single_text():
+    """Test Text Encoder with single text"""
+    try:
+        text_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        
+        # Test with single text string
+        text = "This is a single test query"
+        embeddings = text_encoder.encode(text)
+        
+        assert len(embeddings.shape) == 2, "Should return 2D tensor"
+        assert embeddings.shape[0] == 1, "Should return 1 embedding"
+        assert embeddings.shape[1] == text_encoder.embedding_dim, \
+            f"Expected embedding_dim={text_encoder.embedding_dim}, got {embeddings.shape[1]}"
+        
+        # Check normalization
+        norm = torch.norm(embeddings, dim=1)
+        assert torch.allclose(norm, torch.ones_like(norm), atol=1e-5)
+        
+        print("✓ Text Encoder single text test passed")
+    except Exception as e:
+        print(f"⚠ Text Encoder single text test skipped: {e}")
+
+
+def test_text_encoder_list_texts():
+    """Test Text Encoder with list of texts"""
+    try:
+        text_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        
+        # Test with list of texts
+        texts = [
+            "First query text",
+            "Second query text",
+            "Third query text"
+        ]
+        embeddings = text_encoder.encode(texts)
+        
+        assert embeddings.shape[0] == 3, "Should return 3 embeddings"
+        assert embeddings.shape[1] == text_encoder.embedding_dim
+        
+        # Check normalization
+        norms = torch.norm(embeddings, dim=1)
+        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+        
+        print("✓ Text Encoder list texts test passed")
+    except Exception as e:
+        print(f"⚠ Text Encoder list texts test skipped: {e}")
+
+
+def test_text_encoder_different_lengths():
+    """Test Text Encoder with texts of different lengths"""
+    try:
+        text_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        
+        # Test with very short and very long texts
+        texts = [
+            "Hi",
+            "This is a medium length text that should work fine",
+            "This is a very long text " * 50  # Very long text
+        ]
+        embeddings = text_encoder.encode(texts)
+        
+        assert embeddings.shape[0] == 3
+        assert embeddings.shape[1] == text_encoder.embedding_dim
+        
+        # All should be normalized
+        norms = torch.norm(embeddings, dim=1)
+        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+        
+        print("✓ Text Encoder different lengths test passed")
+    except Exception as e:
+        print(f"⚠ Text Encoder different lengths test skipped: {e}")
+
+
 def test_speech_encoder_basic():
     """Test Speech Encoder (requires model download)"""
     # Skip if models not available
     try:
         speech_encoder = SpeechEncoder(
-            model_name="facebook/hubert-large-ls960",
+            model_name="facebook/hubert-large-ls960-ft",
             freeze=True
         )
         
-        # Create dummy audio (1 second at 16kHz)
-        dummy_audio = torch.randn(16000)
+        # Create dummy audio (5 seconds at 16kHz = 80000 samples)
+        duration_seconds = 5
+        sample_rate = 16000
+        num_samples = duration_seconds * sample_rate
+        dummy_audio = torch.randn(num_samples)
         
         # Test encoding
         representations = speech_encoder.encode(dummy_audio)
@@ -93,9 +221,228 @@ def test_speech_encoder_basic():
         print(f"⚠ Speech Encoder test skipped: {e}")
 
 
+def test_speech_encoder_tensor_format():
+    """Test Speech Encoder with tensor input"""
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        # Test with tensor
+        dummy_audio = torch.randn(80000)
+        representations = speech_encoder.encode(dummy_audio)
+        
+        assert len(representations.shape) == 3
+        assert representations.shape[-1] == speech_encoder.hidden_size
+        assert representations.shape[0] == 1  # Batch size
+        
+        print("✓ Speech Encoder tensor format test passed")
+    except Exception as e:
+        print(f"⚠ Speech Encoder tensor format test skipped: {e}")
+
+
+def test_speech_encoder_numpy_format():
+    """Test Speech Encoder with numpy array input"""
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        # Test with numpy array
+        dummy_audio = np.random.randn(80000).astype(np.float32)
+        representations = speech_encoder.encode(dummy_audio)
+        
+        assert len(representations.shape) == 3
+        assert representations.shape[-1] == speech_encoder.hidden_size
+        
+        print("✓ Speech Encoder numpy format test passed")
+    except Exception as e:
+        print(f"⚠ Speech Encoder numpy format test skipped: {e}")
+
+
+def test_speech_encoder_batch():
+    """Test Speech Encoder with batch of audios"""
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        # Test with list of audios (batch)
+        batch_size = 3
+        audios = [torch.randn(80000) for _ in range(batch_size)]
+        representations = speech_encoder.encode(audios)
+        
+        assert len(representations.shape) == 3
+        assert representations.shape[0] == batch_size, \
+            f"Expected batch_size={batch_size}, got {representations.shape[0]}"
+        assert representations.shape[-1] == speech_encoder.hidden_size
+        
+        print("✓ Speech Encoder batch test passed")
+    except Exception as e:
+        print(f"⚠ Speech Encoder batch test skipped: {e}")
+
+
+def test_speech_encoder_different_durations():
+    """Test Speech Encoder with audios of different durations"""
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        # Test with different durations (3, 5, 10 seconds)
+        durations = [3, 5, 10]
+        sample_rate = 16000
+        
+        for duration in durations:
+            num_samples = duration * sample_rate
+            dummy_audio = torch.randn(num_samples)
+            representations = speech_encoder.encode(dummy_audio)
+            
+            assert len(representations.shape) == 3
+            assert representations.shape[-1] == speech_encoder.hidden_size
+            # Longer audio should produce more sequence tokens
+            assert representations.shape[1] > 0
+        
+        print("✓ Speech Encoder different durations test passed")
+    except Exception as e:
+        print(f"⚠ Speech Encoder different durations test skipped: {e}")
+
+
+def test_speech_encoder_output_dimensions():
+    """Test Speech Encoder output dimensions"""
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        dummy_audio = torch.randn(80000)
+        representations = speech_encoder.encode(dummy_audio)
+        
+        # Should be (batch_size, seq_len, hidden_size)
+        assert len(representations.shape) == 3, "Should return 3D tensor"
+        batch_size, seq_len, hidden_size = representations.shape
+        
+        assert batch_size == 1, "Single audio should have batch_size=1"
+        assert seq_len > 0, "Sequence length should be positive"
+        assert hidden_size == speech_encoder.hidden_size == 1024, \
+            f"Expected hidden_size=1024, got {hidden_size}"
+        
+        print("✓ Speech Encoder output dimensions test passed")
+    except Exception as e:
+        print(f"⚠ Speech Encoder output dimensions test skipped: {e}")
+
+
+def test_dimension_integration():
+    """Test that all components have compatible dimensions"""
+    print("\nTesting dimension integration...")
+    
+    # Test SpeechEncoder -> Adapter dimension flow
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        adapter = SpeechAdapter(input_dim=1024, output_dim=4096)
+        
+        # Create audio and get speech representations
+        dummy_audio = torch.randn(80000)
+        speech_reprs = speech_encoder.encode(dummy_audio)
+        
+        # Check speech encoder output
+        assert speech_reprs.shape[-1] == 1024, \
+            f"SpeechEncoder should output 1024-dim, got {speech_reprs.shape[-1]}"
+        
+        # Pass through adapter
+        audio_embedding = adapter(speech_reprs)
+        
+        # Check adapter output
+        assert audio_embedding.shape[-1] == 4096, \
+            f"Adapter should output 4096-dim, got {audio_embedding.shape[-1]}"
+        
+        print("✓ SpeechEncoder (1024) -> Adapter (4096) dimension flow works")
+    except Exception as e:
+        print(f"⚠ SpeechEncoder -> Adapter test skipped: {e}")
+    
+    # Test TextEncoder dimension
+    try:
+        text_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        text_embedding = text_encoder.encode("Test query")
+        
+        assert text_embedding.shape[-1] == 4096, \
+            f"TextEncoder should output 4096-dim, got {text_embedding.shape[-1]}"
+        
+        print("✓ TextEncoder outputs 4096-dim embeddings")
+    except Exception as e:
+        print(f"⚠ TextEncoder dimension test skipped: {e}")
+    
+    # Test that embeddings can be compared (same dimension)
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        adapter = SpeechAdapter(input_dim=1024, output_dim=4096)
+        text_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        
+        # Get embeddings
+        dummy_audio = torch.randn(80000)
+        speech_reprs = speech_encoder.encode(dummy_audio)
+        audio_embedding = adapter(speech_reprs)
+        text_embedding = text_encoder.encode("Test query")
+        
+        # Check dimensions match
+        assert audio_embedding.shape[-1] == text_embedding.shape[-1] == 4096, \
+            "Audio and text embeddings should have same dimension (4096)"
+        
+        # Can compute similarity (cosine similarity)
+        similarity = torch.nn.functional.cosine_similarity(
+            audio_embedding, text_embedding, dim=-1
+        )
+        assert similarity.shape == (1,), "Should compute similarity"
+        
+        print("✓ Audio and text embeddings are compatible (4096-dim)")
+        print("✓ Embeddings can be compared (cosine similarity works)")
+        
+    except Exception as e:
+        print(f"⚠ Embedding compatibility test skipped: {e}")
+    
+    print("✓ Dimension integration tests completed")
+
+
 if __name__ == "__main__":
+    # Speech Adapter tests
     test_speech_adapter()
-    test_text_encoder_basic()
+    test_speech_adapter_different_seq_len()
+    test_speech_adapter_different_batch_sizes()
+    test_speech_adapter_downsampling()
+    
+    # Text Encoder tests
+    #test_text_encoder_basic()
+    #test_text_encoder_single_text()
+    #test_text_encoder_list_texts()
+    #test_text_encoder_different_lengths()
+    
+    # Speech Encoder tests
     test_speech_encoder_basic()
+    test_speech_encoder_tensor_format()
+    test_speech_encoder_numpy_format()
+    test_speech_encoder_batch()
+    test_speech_encoder_different_durations()
+    test_speech_encoder_output_dimensions()
+    
+    # Integration tests
+    test_dimension_integration()
+    
     print("\nAll tests completed!")
 

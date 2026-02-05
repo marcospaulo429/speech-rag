@@ -32,7 +32,6 @@ class DistillationLoss(nn.Module):
         
         # Loss functions
         self.mse_loss = nn.MSELoss()
-        self.cosine_loss = nn.CosineSimilarityLoss()
     
     def forward(
         self,

@@ -1,6 +1,6 @@
 models:
   text_encoder: "intfloat/e5-mistral-7b-instruct"
-  speech_encoder: "facebook/hubert-large-ls960"
+  speech_encoder: "facebook/hubert-large-ls960-ft"
   
 training:
   batch_size: 16

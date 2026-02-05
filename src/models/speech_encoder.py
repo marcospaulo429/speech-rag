@@ -4,8 +4,9 @@ import torch
 import torch.nn as nn
 import torchaudio
 from transformers import HubertModel, Wav2Vec2Processor
-from typing import Union, List
+from typing import Union, List, Optional
 import numpy as np
+import os
 
 
 class SpeechEncoder(nn.Module):
@@ -16,23 +17,33 @@ class SpeechEncoder(nn.Module):
     
     def __init__(
         self,
-        model_name: str = "facebook/hubert-large-ls960",
+        model_name: str = "facebook/hubert-large-ls960-ft",
         freeze: bool = True,
-        target_sample_rate: int = 16000
+        target_sample_rate: int = 16000,
+        token: Optional[str] = None
     ):
         """
         Args:
             model_name: HuggingFace model identifier
             freeze: Whether to freeze model parameters
             target_sample_rate: Target audio sample rate (16kHz)
+            token: HuggingFace token for private models (defaults to HF_TOKEN env var)
         """
         super().__init__()
         self.model_name = model_name
         self.target_sample_rate = target_sample_rate
         
+        # Get token from parameter, environment variable, or None
+        hf_token = token or os.getenv("HF_TOKEN")
+        
         # Load HuBERT model and processor
-        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
-        self.model = HubertModel.from_pretrained(model_name)
+        # Use token only if provided (for private models)
+        load_kwargs = {}
+        if hf_token:
+            load_kwargs["token"] = hf_token
+        
+        self.processor = Wav2Vec2Processor.from_pretrained(model_name, **load_kwargs)
+        self.model = HubertModel.from_pretrained(model_name, **load_kwargs)
         
         # Freeze all parameters
         if freeze:
@@ -69,7 +80,12 @@ class SpeechEncoder(nn.Module):
         else:
             waveform = audio
         
-        # Convert to mono if stereo
+        # CORREÇÃO: Garantir formato correto antes de verificar canais
+        # Se for 1D, assumir que é mono e adicionar dimensão de canal
+        if len(waveform.shape) == 1:
+            waveform = waveform.unsqueeze(0)  # (samples,) -> (1, samples)
+        
+        # Convert to mono if stereo (agora waveform sempre tem shape (channels, samples))
         if waveform.shape[0] > 1:
             waveform = torch.mean(waveform, dim=0, keepdim=True)
         
@@ -82,6 +98,7 @@ class SpeechEncoder(nn.Module):
             waveform = resampler(waveform)
         
         # Ensure correct shape: (1, samples)
+        # Já garantimos acima, mas vamos manter para segurança
         if len(waveform.shape) == 1:
             waveform = waveform.unsqueeze(0)
         
