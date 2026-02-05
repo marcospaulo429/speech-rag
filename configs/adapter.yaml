@@ -1,8 +1,0 @@
-architecture: "mlp"  # mlp ou transformer
-speech_dim: 768
-text_dim: 768
-hidden_dim: 512
-num_layers: 2
-activation: "relu"
-dropout: 0.1
-

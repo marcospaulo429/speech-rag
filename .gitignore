@@ -50,6 +50,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# UV
+.uv/
+uv.lock  # Lock file - pode ser versionado ou não, dependendo da preferência
+
 # IDEs
 .vscode/
 .idea/

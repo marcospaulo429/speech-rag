@@ -1,0 +1,29 @@
+models:
+  text_encoder: "intfloat/e5-mistral-7b-instruct"
+  speech_encoder: "facebook/hubert-large-ls960"
+  
+training:
+  batch_size: 16
+  learning_rate: 1e-4
+  num_epochs: 10
+  optimizer: "adamw"
+  loss_type: "mse"  # ou "cosine"
+  weight_decay: 0.01
+  warmup_steps: 1000
+  save_steps: 1000
+  eval_steps: 500
+  logging_steps: 100
+  
+data:
+  dataset_name: "spoken_squad"  # Spoken Squad dataset
+  dataset_config: null  # Não necessário para Spoken Squad
+  audio_column: "audio"
+  text_column: "passage_text"  # ou "context" dependendo da estrutura
+  sample_rate: 16000
+  max_audio_length: 60  # Spoken Squad pode ter passagens mais longas
+  
+paths:
+  checkpoint_dir: "checkpoints/"
+  data_dir: "data/"
+  output_dir: "outputs/"
+
