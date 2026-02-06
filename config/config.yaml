@@ -1,6 +1,7 @@
 models:
   text_encoder: "intfloat/e5-mistral-7b-instruct"
   speech_encoder: "facebook/hubert-large-ls960-ft"
+  generator: "Qwen/Qwen-Audio-Chat"  # Qwen-Audio-Chat for response generation
   
 training:
   batch_size: 16
@@ -13,6 +14,15 @@ training:
   save_steps: 1000
   eval_steps: 500
   logging_steps: 100
+  
+generation:
+  model_name: "Qwen/Qwen-Audio-Chat"  # Qwen-Audio-Chat model
+  temperature: 0.7  # Sampling temperature
+  max_new_tokens: 512  # Maximum tokens to generate
+  top_p: 0.9  # Nucleus sampling parameter
+  top_k_audio: 3  # Number of top audio passages to use for generation
+  do_sample: true  # Whether to use sampling
+  device: null  # Auto-detect if null (cuda/cpu)
   
 data:
   dataset_name: "spoken_squad"  # Spoken Squad dataset

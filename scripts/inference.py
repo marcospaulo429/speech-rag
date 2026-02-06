@@ -11,7 +11,7 @@ import json
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models import TextEncoder, SpeechEncoder, SpeechAdapter
-from src.inference import SpeechRetriever
+from src.inference import SpeechRetriever, SpeechRAGPipeline, AudioConditionedGenerator
 
 
 def load_config(config_path: str) -> dict:
@@ -70,6 +70,29 @@ def main():
         type=str,
         default=None,
         help="Output file for results (JSON)"
+    )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help="Enable response generation using Qwen-Audio-Chat (requires retrieved audios)"
+    )
+    parser.add_argument(
+        "--top-k-audio",
+        type=int,
+        default=None,
+        help="Number of top audio passages to use for generation (uses config if not specified)"
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Generation temperature (uses config if not specified)"
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=None,
+        help="Maximum tokens to generate (uses config if not specified)"
     )
     
     args = parser.parse_args()
@@ -159,18 +182,83 @@ def main():
                 print(f"  Metadata: {result['metadata']}")
             print()
         
-        # Save results if output specified
-        if args.output:
-            output_data = {
-                "query": args.query,
-                "k": args.k,
-                "results": results
-            }
-            with open(args.output, 'w') as f:
-                json.dump(output_data, f, indent=2)
-            print(f"Results saved to {args.output}")
+        # Generate response if --generate is enabled
+        if args.generate:
+            print("\n" + "=" * 80)
+            print("Generating response using Qwen-Audio-Chat...")
+            print("=" * 80)
+            
+            # Load generation config
+            gen_config = config.get("generation", {})
+            top_k_audio = args.top_k_audio or gen_config.get("top_k_audio", 3)
+            temperature = args.temperature if args.temperature is not None else gen_config.get("temperature", 0.7)
+            max_new_tokens = args.max_new_tokens or gen_config.get("max_new_tokens", 512)
+            generator_device = gen_config.get("device") or device
+            
+            # Create generator
+            print("Loading Qwen-Audio-Chat generator...")
+            generator = AudioConditionedGenerator(
+                model_name=gen_config.get("model_name", "Qwen/Qwen-Audio-Chat"),
+                device=generator_device
+            )
+            
+            # Create RAG pipeline
+            pipeline = SpeechRAGPipeline(
+                retriever=retriever,
+                generator=generator,
+                top_k_audio=top_k_audio
+            )
+            
+            # Generate response
+            print(f"Using top {top_k_audio} audio passages for generation...")
+            rag_result = pipeline.retrieve_and_generate(
+                query=args.query,
+                k=top_k_audio,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                return_retrieval_results=True
+            )
+            
+            # Display generated response
+            print("\n" + "-" * 80)
+            print("Generated Response:")
+            print("-" * 80)
+            print(rag_result["response"])
+            print("-" * 80)
+            print(f"\nUsed {rag_result['num_audios']} audio passage(s) for generation")
+            
+            # Save results if output specified
+            if args.output:
+                output_data = {
+                    "query": args.query,
+                    "k": args.k,
+                    "retrieval_results": results,
+                    "generation": {
+                        "response": rag_result["response"],
+                        "audio_paths": rag_result["audio_paths"],
+                        "num_audios": rag_result["num_audios"],
+                        "temperature": temperature,
+                        "max_new_tokens": max_new_tokens
+                    }
+                }
+                with open(args.output, 'w') as f:
+                    json.dump(output_data, f, indent=2)
+                print(f"\nResults saved to {args.output}")
+        else:
+            # Save results if output specified (retrieval only)
+            if args.output:
+                output_data = {
+                    "query": args.query,
+                    "k": args.k,
+                    "results": results
+                }
+                with open(args.output, 'w') as f:
+                    json.dump(output_data, f, indent=2)
+                print(f"\nResults saved to {args.output}")
     else:
         print("No query provided. Use --query to search.")
+        if args.generate:
+            print("Note: --generate requires --query to be provided.")
         print("Index is ready for queries.")
 
 
