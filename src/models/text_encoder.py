@@ -17,7 +17,7 @@ class TextEncoder(nn.Module):
     
     def __init__(
         self, 
-        model_name: str = "intfloat/e5-mistral-7b-instruct", 
+        model_name: str = "Qwen/Qwen3-Embedding-0.6B", 
         freeze: bool = True,
         instruction: Optional[str] = None
     ):

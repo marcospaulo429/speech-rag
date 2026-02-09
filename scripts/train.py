@@ -92,7 +92,7 @@ def main():
     train_dataset = SpeechDataset(
         dataset_name=config["data"]["dataset_name"],
         dataset_config=config["data"].get("dataset_config"),
-        split="train",
+        split="test",
         sample_rate=config["data"]["sample_rate"],
         max_audio_length=config["data"]["max_audio_length"],
         cache_dir=config["paths"].get("data_dir")
@@ -120,10 +120,14 @@ def main():
     )
     
     # Optimizer
+    # Convert learning_rate to float (YAML may read 1e-4 as string)
+    learning_rate = float(config["training"]["learning_rate"])
+    weight_decay = float(config["training"].get("weight_decay", 0.01))
+    
     optimizer = torch.optim.AdamW(
         adapter.parameters(),
-        lr=config["training"]["learning_rate"],
-        weight_decay=config["training"].get("weight_decay", 0.01)
+        lr=learning_rate,
+        weight_decay=weight_decay
     )
     
     # Create trainer
