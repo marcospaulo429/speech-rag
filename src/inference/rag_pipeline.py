@@ -136,3 +136,4 @@ class SpeechRAGPipeline:
         """
         return self.generator.generate(query, audio_paths, **generation_kwargs)
 
+

@@ -1,5 +1,6 @@
 models:
-  text_encoder: "intfloat/e5-mistral-7b-instruct"
+  text_encoder: "intfloat/e5-mistral-7b-instruct"  # Options: "intfloat/e5-mistral-7b-instruct" (4096 dim) or "Qwen/Qwen3-Embedding-0.6B" (1024 dim)
+  text_encoder_type: "e5"  # "e5" or "qwen3" - auto-detected if not specified
   speech_encoder: "facebook/hubert-large-ls960-ft"
   generator: "Qwen/Qwen-Audio-Chat"  # Qwen-Audio-Chat for response generation
   
@@ -25,7 +26,7 @@ generation:
   device: null  # Auto-detect if null (cuda/cpu)
   
 data:
-  dataset_name: "spoken_squad"  # Spoken Squad dataset
+  dataset_name: "spoken_squad_test"  # Spoken Squad dataset
   dataset_config: null  # Não necessário para Spoken Squad
   audio_column: "audio"
   text_column: "passage_text"  # ou "context" dependendo da estrutura

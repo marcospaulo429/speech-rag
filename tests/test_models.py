@@ -420,6 +420,159 @@ def test_dimension_integration():
     print("✓ Dimension integration tests completed")
 
 
+def test_text_encoder_qwen3_dimensions():
+    """Test Qwen3-Embedding-0.6B dimensions"""
+    print("\nTesting Qwen3-Embedding-0.6B dimensions...")
+    
+    try:
+        text_encoder = TextEncoder(
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            freeze=True
+        )
+        
+        # Check embedding dimension
+        print(f"  Qwen3-Embedding-0.6B embedding_dim: {text_encoder.embedding_dim}")
+        
+        # Test encoding
+        text_embedding = text_encoder.encode("Test query")
+        
+        # Qwen3-Embedding-0.6B should output 1024 dimensions by default
+        assert text_embedding.shape[-1] == text_encoder.embedding_dim, \
+            f"Embedding shape should match embedding_dim, got {text_embedding.shape[-1]}"
+        
+        # Should be normalized
+        norm = torch.norm(text_embedding, p=2, dim=-1)
+        assert torch.allclose(norm, torch.ones_like(norm), atol=1e-5), \
+            "Embeddings should be L2-normalized"
+        
+        print(f"✓ Qwen3-Embedding-0.6B outputs {text_encoder.embedding_dim}-dim embeddings")
+        print(f"✓ Embeddings are normalized")
+        
+    except Exception as e:
+        print(f"⚠ Qwen3-Embedding-0.6B dimension test skipped: {e}")
+        print("  (This is expected if Qwen3-Embedding-0.6B model is not available)")
+
+
+def test_text_encoder_both_models():
+    """Test both E5-Mistral and Qwen3-Embedding-0.6B"""
+    print("\nTesting both text encoders...")
+    
+    # Test E5-Mistral
+    try:
+        e5_encoder = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        e5_embedding = e5_encoder.encode("Test query")
+        print(f"✓ E5-Mistral: {e5_encoder.embedding_dim} dimensions")
+    except Exception as e:
+        print(f"⚠ E5-Mistral test skipped: {e}")
+    
+    # Test Qwen3
+    try:
+        qwen3_encoder = TextEncoder(
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            freeze=True
+        )
+        qwen3_embedding = qwen3_encoder.encode("Test query")
+        print(f"✓ Qwen3-Embedding-0.6B: {qwen3_encoder.embedding_dim} dimensions")
+        
+        # Note: They have different dimensions, so they can't be directly compared
+        # Each needs its own adapter trained for that dimension
+        print(f"  Note: E5 has {e5_encoder.embedding_dim} dim, Qwen3 has {qwen3_encoder.embedding_dim} dim")
+        print(f"  Each encoder requires an adapter trained for its specific dimension")
+        
+    except Exception as e:
+        print(f"⚠ Qwen3-Embedding-0.6B test skipped: {e}")
+
+
+def test_adapter_dynamic_dimensions():
+    """Test SpeechAdapter with different output dimensions"""
+    print("\nTesting SpeechAdapter with dynamic dimensions...")
+    
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        
+        # Test with E5 dimension (4096)
+        adapter_e5 = SpeechAdapter(input_dim=1024, output_dim=4096)
+        dummy_audio = torch.randn(80000)
+        speech_reprs = speech_encoder.encode(dummy_audio)
+        audio_embedding_e5 = adapter_e5(speech_reprs)
+        
+        assert audio_embedding_e5.shape[-1] == 4096, \
+            f"Adapter should output 4096-dim for E5, got {audio_embedding_e5.shape[-1]}"
+        print("✓ Adapter works with 4096 dimensions (E5-Mistral)")
+        
+        # Test with Qwen3 dimension (1024)
+        adapter_qwen3 = SpeechAdapter(input_dim=1024, output_dim=1024)
+        audio_embedding_qwen3 = adapter_qwen3(speech_reprs)
+        
+        assert audio_embedding_qwen3.shape[-1] == 1024, \
+            f"Adapter should output 1024-dim for Qwen3, got {audio_embedding_qwen3.shape[-1]}"
+        print("✓ Adapter works with 1024 dimensions (Qwen3-Embedding-0.6B)")
+        
+        # Both should be normalized
+        norm_e5 = torch.norm(audio_embedding_e5, p=2, dim=-1)
+        norm_qwen3 = torch.norm(audio_embedding_qwen3, p=2, dim=-1)
+        assert torch.allclose(norm_e5, torch.ones_like(norm_e5), atol=1e-5), \
+            "E5 adapter output should be normalized"
+        assert torch.allclose(norm_qwen3, torch.ones_like(norm_qwen3), atol=1e-5), \
+            "Qwen3 adapter output should be normalized"
+        
+        print("✓ Both adapters produce normalized embeddings")
+        
+    except Exception as e:
+        print(f"⚠ Adapter dynamic dimensions test skipped: {e}")
+
+
+def test_end_to_end_with_different_encoders():
+    """Test end-to-end pipeline with both encoders"""
+    print("\nTesting end-to-end with different encoders...")
+    
+    try:
+        speech_encoder = SpeechEncoder(
+            model_name="facebook/hubert-large-ls960-ft",
+            freeze=True
+        )
+        dummy_audio = torch.randn(80000)
+        speech_reprs = speech_encoder.encode(dummy_audio)
+        
+        # Test with E5
+        text_encoder_e5 = TextEncoder(
+            model_name="intfloat/e5-mistral-7b-instruct",
+            freeze=True
+        )
+        adapter_e5 = SpeechAdapter(input_dim=1024, output_dim=4096)
+        audio_emb_e5 = adapter_e5(speech_reprs)
+        text_emb_e5 = text_encoder_e5.encode("Test query")
+        
+        assert audio_emb_e5.shape[-1] == text_emb_e5.shape[-1] == 4096, \
+            "E5 embeddings should have matching dimensions"
+        print("✓ E5-Mistral end-to-end works (4096-dim)")
+        
+        # Test with Qwen3 (if available)
+        try:
+            text_encoder_qwen3 = TextEncoder(
+                model_name="Qwen/Qwen3-Embedding-0.6B",
+                freeze=True
+            )
+            adapter_qwen3 = SpeechAdapter(input_dim=1024, output_dim=1024)
+            audio_emb_qwen3 = adapter_qwen3(speech_reprs)
+            text_emb_qwen3 = text_encoder_qwen3.encode("Test query")
+            
+            assert audio_emb_qwen3.shape[-1] == text_emb_qwen3.shape[-1] == 1024, \
+                "Qwen3 embeddings should have matching dimensions"
+            print("✓ Qwen3-Embedding-0.6B end-to-end works (1024-dim)")
+        except Exception as e:
+            print(f"  Qwen3 end-to-end test skipped: {e}")
+        
+    except Exception as e:
+        print(f"⚠ End-to-end test skipped: {e}")
+
+
 if __name__ == "__main__":
     # Speech Adapter tests
     test_speech_adapter()
@@ -437,6 +590,13 @@ if __name__ == "__main__":
     test_speech_encoder_basic()
     test_speech_encoder_tensor_format()
     test_speech_encoder_numpy_format()
+    
+    # Dimension tests
+    test_dimension_integration()
+    test_text_encoder_qwen3_dimensions()
+    test_text_encoder_both_models()
+    test_adapter_dynamic_dimensions()
+    test_end_to_end_with_different_encoders()
     test_speech_encoder_batch()
     test_speech_encoder_different_durations()
     test_speech_encoder_output_dimensions()

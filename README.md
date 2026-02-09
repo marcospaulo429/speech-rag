@@ -8,13 +8,15 @@ Este projeto implementa um sistema que permite buscar trechos de áudio usando q
 
 ## Arquitetura
 
-- **Text Encoder**: E5-Mistral-7B-Instruct (congelado)
-- **Speech Encoder**: HuBERT-large (congelado)
-- **Speech Adapter**: Adaptador treinável que projeta embeddings de áudio para o espaço de texto
+- **Text Encoder**: Suporta dois modelos:
+  - **E5-Mistral-7B-Instruct** (4096 dimensões) - padrão
+  - **Qwen3-Embedding-0.6B** (1024 dimensões) - alternativa mais leve
+- **Speech Encoder**: HuBERT-large (congelado, 1024 dimensões)
+- **Speech Adapter**: Adaptador treinável que projeta embeddings de áudio (1024) para o espaço de texto (4096 ou 1024, dependendo do encoder escolhido)
 
 ## Dataset
 
-Este projeto utiliza o **Spoken Squad** como dataset principal. O Spoken Squad é um dataset de question answering sobre áudio baseado no SQuAD, contendo:
+Este projeto utiliza o **Spoken Squad Test** como dataset principal. O Spoken Squad é um dataset de question answering sobre áudio baseado no SQuAD, contendo:
 - Passagens de áudio lidas
 - Transcrições das passagens (ground truth)
 - Perguntas sobre o conteúdo

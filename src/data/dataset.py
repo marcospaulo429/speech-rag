@@ -16,7 +16,7 @@ class SpeechDataset(Dataset):
     
     def __init__(
         self,
-        dataset_name: str = "spoken_squad",
+        dataset_name: str = "spoken_squad_test",
         dataset_config: Optional[str] = None,
         split: str = "train",
         audio_column: str = "audio",
@@ -28,7 +28,7 @@ class SpeechDataset(Dataset):
     ):
         """
         Args:
-            dataset_name: HuggingFace dataset name (default: "spoken_squad")
+            dataset_name: HuggingFace dataset name (default: "spoken_squad_test")
             dataset_config: Dataset configuration (None for Spoken Squad)
             split: Dataset split (train, validation, test)
             audio_column: Column name for audio data (default: "audio")
