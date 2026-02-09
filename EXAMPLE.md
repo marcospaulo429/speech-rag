@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ### 1. Preparar Configuração
 
 Edite `config/config.yaml` conforme necessário, especialmente:
-- `dataset_name`: Nome do dataset HuggingFace (padrão: "spoken_squad_test")
+- `dataset_name`: Nome do dataset HuggingFace (padrão: "AudioLLMs/spoken_squad_test")
 - `text_encoder`: Escolha entre:
   - `"intfloat/e5-mistral-7b-instruct"` (4096 dim, mais preciso, requer mais memória)
   - `"Qwen/Qwen3-Embedding-0.6B"` (1024 dim, mais leve, mais rápido)
@@ -155,7 +155,7 @@ speech_encoder = SpeechEncoder(freeze=True)
 
 # Carregar dataset
 train_dataset = SpeechDataset(
-    dataset_name="spoken_squad_test",
+    dataset_name="AudioLLMs/spoken_squad_test",
     dataset_config=None,
     split="train",
     audio_column="audio",

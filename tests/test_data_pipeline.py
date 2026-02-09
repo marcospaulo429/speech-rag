@@ -135,7 +135,7 @@ def test_speech_dataset_getitem():
     # This test requires a real dataset, so we'll skip if not available
     try:
         dataset = SpeechDataset(
-            dataset_name="spoken_squad_test",
+            dataset_name="AudioLLMs/spoken_squad_test",
             split="train",
             streaming=True,
             sample_rate=16000,
@@ -184,7 +184,7 @@ def test_speech_dataset_collate_fn():
     # Create a dummy dataset to get collate function
     try:
         dataset = SpeechDataset(
-            dataset_name="spoken_squad_test",
+            dataset_name="AudioLLMs/spoken_squad_test",
             split="train",
             streaming=True
         )
@@ -220,7 +220,7 @@ def test_speech_dataset_different_audio_formats():
     # This test requires dataset access, so we'll create a mock scenario
     try:
         dataset = SpeechDataset(
-            dataset_name="spoken_squad_test",
+            dataset_name="AudioLLMs/spoken_squad_test",
             split="train",
             streaming=True,
             sample_rate=16000
@@ -245,7 +245,7 @@ def test_dataset_preprocessor_integration():
     """Test integration between SpeechDataset and AudioPreprocessor"""
     try:
         dataset = SpeechDataset(
-            dataset_name="spoken_squad_test",
+            dataset_name="AudioLLMs/spoken_squad_test",
             split="train",
             streaming=True,
             sample_rate=16000,

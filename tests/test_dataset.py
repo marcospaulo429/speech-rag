@@ -16,7 +16,7 @@ def test_spoken_squad_loading():
     try:
         # Try to load a small sample
         dataset = SpeechDataset(
-            dataset_name="spoken_squad_test",
+            dataset_name="AudioLLMs/spoken_squad_test",
             dataset_config=None,
             split="train",
             audio_column="audio",
@@ -27,7 +27,7 @@ def test_spoken_squad_loading():
         )
         
         print(f"✓ Dataset created successfully")
-        print(f"  Dataset name: spoken_squad_test")
+        print(f"  Dataset name: AudioLLMs/spoken_squad_test")
         print(f"  Split: train")
         print(f"  Streaming mode: True")
         
@@ -46,7 +46,7 @@ def test_spoken_squad_loading():
     except Exception as e:
         print(f"❌ Failed to load dataset: {e}")
         print("\nPossible issues:")
-        print("1. Dataset 'spoken_squad_test' might not be available on HuggingFace")
+        print("1. Dataset 'AudioLLMs/spoken_squad_test' might not be available on HuggingFace")
         print("2. You might need to use a different dataset name")
         print("3. Check your internet connection for downloading the dataset")
         print("4. Verify the dataset identifier in config/config.yaml")
@@ -65,7 +65,7 @@ def test_custom_config():
     for text_col in possible_text_columns:
         try:
             dataset = SpeechDataset(
-                dataset_name="spoken_squad_test",
+                dataset_name="AudioLLMs/spoken_squad_test",
                 text_column=text_col,
                 split="train",
                 streaming=True
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     print("=" * 60)
     if success:
         print("✓ Basic test completed")
-        print("\nNote: If the dataset name 'spoken_squad_test' doesn't exist,")
+        print("\nNote: If the dataset name 'AudioLLMs/spoken_squad_test' doesn't exist,")
         print("you may need to:")
         print("1. Check the exact dataset identifier on HuggingFace")
         print("2. Update config/config.yaml with the correct name")

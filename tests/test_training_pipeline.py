@@ -169,7 +169,7 @@ def test_trainer_initialization():
         # Create mock dataset
         try:
             train_dataset = SpeechDataset(
-                dataset_name="spoken_squad_test",
+                dataset_name="AudioLLMs/spoken_squad_test",
                 split="train",
                 streaming=True
             )
