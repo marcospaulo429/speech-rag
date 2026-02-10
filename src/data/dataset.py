@@ -3,12 +3,26 @@
 import torch
 from torch.utils.data import Dataset
 from typing import Dict, List, Optional, Union
-from datasets import load_dataset, Dataset as HFDataset
+from datasets import load_dataset, Dataset as HFDataset, Audio
 from .preprocessing import AudioPreprocessor
 import numpy as np
 import io
 import soundfile as sf
 
+
+def speech_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+    texts = [item["text"] for item in batch]
+    audios = [item["audio"] for item in batch]
+    max_len = max(audio.shape[-1] for audio in audios)
+    padded_audios = [
+        torch.nn.functional.pad(audio, (0, max_len - audio.shape[-1]))
+        for audio in audios
+    ]
+    return {
+        "audio": torch.stack(padded_audios),
+        "text": texts,
+        "sample_rate": torch.tensor([item["sample_rate"] for item in batch])
+    }
 
 class SpeechDataset(Dataset):
     """
@@ -21,8 +35,8 @@ class SpeechDataset(Dataset):
         dataset_name: str = "AudioLLMs/spoken_squad_test",
         dataset_config: Optional[str] = None,
         split: str = "test",
-        audio_column: str = "audio",
-        text_column: str = "passage_text",
+        audio_column: str = "context",
+        text_column: str = "instruction",
         sample_rate: int = 16000,
         max_audio_length: float = 60.0,
         cache_dir: Optional[str] = None,
@@ -33,8 +47,8 @@ class SpeechDataset(Dataset):
             dataset_name: HuggingFace dataset name (default: "AudioLLMs/spoken_squad_test")
             dataset_config: Dataset configuration (None for Spoken Squad)
             split: Dataset split (train, validation, test)
-            audio_column: Column name for audio data (default: "audio")
-            text_column: Column name for text transcriptions (default: "passage_text")
+            audio_column: Column name for audio data (default: "context")
+            text_column: Column name for text transcriptions (default: "instruction")
             sample_rate: Target sample rate
             max_audio_length: Maximum audio length in seconds
             cache_dir: Cache directory for datasets
@@ -55,7 +69,6 @@ class SpeechDataset(Dataset):
         )
         
         # Load dataset
-        # Keep as Arrow dataset to avoid automatic audio decoding (which requires torchcodec)
         try:
             if dataset_config:
                 self.dataset = load_dataset(
@@ -66,7 +79,6 @@ class SpeechDataset(Dataset):
                     streaming=streaming
                 )
             else:
-                # For Spoken Squad and datasets without config
                 self.dataset = load_dataset(
                     dataset_name,
                     split=split,
@@ -78,25 +90,14 @@ class SpeechDataset(Dataset):
                 f"Failed to load dataset {dataset_name} with config {dataset_config}: {e}\n"
                 f"Make sure the dataset is available on HuggingFace or provide a custom loader."
             )
-        
-        # Disable automatic audio decoding to avoid torchcodec requirement
-        # Use with_format(None) to get raw Arrow data without any decoding
+
         if not streaming:
-            try:
-                # Disable all formatting to get raw data
-                # This prevents HuggingFace from trying to decode audio with torchcodec
-                self.dataset = self.dataset.with_format(None)
-            except Exception:
-                # If with_format fails, try set_format
-                try:
-                    self.dataset.set_format(None)
-                except Exception:
-                    # If both fail, we'll handle raw bytes in __getitem__
-                    pass
-        
-        # Do NOT convert to list - keep as Arrow dataset to avoid automatic decoding
-        # We'll decode audio manually in __getitem__ when needed
-    
+            features = self.dataset.features.copy()
+            features[self.audio_column] = Audio(decode=False)
+            self.dataset = self.dataset.cast(features)
+            self.dataset = self.dataset.with_format(None)
+            assert isinstance(self.dataset.features[self.audio_column], Audio)
+            assert self.dataset.features[self.audio_column].decode is False
     def _decode_audio(self, audio_data) -> tuple:
         """
         Decode audio data manually without requiring torchcodec.
@@ -109,9 +110,16 @@ class SpeechDataset(Dataset):
         """
         # If already decoded (dict format from HuggingFace)
         if isinstance(audio_data, dict):
+            # Prefer bytes/path when decode=False
+            if "bytes" in audio_data and audio_data["bytes"] is not None:
+                return self._decode_audio(audio_data["bytes"])
+            if "path" in audio_data and audio_data["path"] is not None:
+                return self.preprocessor.load_audio(audio_data["path"])
             if "array" in audio_data:
                 audio_array = audio_data["array"]
                 audio_sr = audio_data.get("sampling_rate", self.sample_rate)
+                # Ensure numeric dtype
+                audio_array = np.asarray(audio_array, dtype=np.float32)
                 waveform = torch.from_numpy(audio_array).float()
                 return waveform, audio_sr
         
@@ -236,32 +244,5 @@ class SpeechDataset(Dataset):
         Get collate function for DataLoader.
         Handles variable-length audio sequences.
         """
-        def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-            """
-            Collate function that pads audio sequences.
-            
-            Args:
-                batch: List of samples
-            
-            Returns:
-                Batched tensors
-            """
-            texts = [item["text"] for item in batch]
-            audios = [item["audio"] for item in batch]
-            
-            # Pad audio sequences to same length
-            max_len = max(audio.shape[-1] for audio in audios)
-            padded_audios = []
-            for audio in audios:
-                pad_len = max_len - audio.shape[-1]
-                padded = torch.nn.functional.pad(audio, (0, pad_len))
-                padded_audios.append(padded)
-            
-            return {
-                "audio": torch.stack(padded_audios),
-                "text": texts,
-                "sample_rate": torch.tensor([item["sample_rate"] for item in batch])
-            }
-        
-        return collate_fn
+        return speech_collate_fn
 
