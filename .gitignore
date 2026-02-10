@@ -62,6 +62,8 @@ uv.lock  # Lock file - pode ser versionado ou não, dependendo da preferência
 *~
 
 # Data and models
+/data/
+/wandb/
 checkpoints/
 indices/
 *.pth

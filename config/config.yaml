@@ -9,7 +9,7 @@ training:
   learning_rate: 1e-4
   num_epochs: 10
   optimizer: "adamw"
-  loss_type: "mse"  # ou "cosine"
+  loss_type: "cosine"  # ou "mse"
   weight_decay: 0.01
   warmup_steps: 1000
   save_steps: 1000
@@ -26,15 +26,12 @@ generation:
   device: null  # Auto-detect if null (cuda/cpu)
   
 data:
-  dataset_name: "AudioLLMs/spoken_squad_test"  # Spoken Squad dataset
-  dataset_config: null  # Não necessário para Spoken Squad
-  audio_column: "audio"
-  text_column: "passage_text"  # ou "context" dependendo da estrutura
+  dataset_name: "SpokenSQuAD"
   sample_rate: 16000
-  max_audio_length: 60  # Spoken Squad pode ter passagens mais longas
+  max_audio_length: 60.0
   
 paths:
-  checkpoint_dir: "checkpoints/"
-  data_dir: "data/"
-  output_dir: "outputs/"
+  # Use absolute path to be safe
+  data_dir: "/Users/orlow/dev/paper-audio/speech-rag/data"
+  output_dir: "/Users/orlow/dev/paper-audio/speech-rag/outputs/"
 

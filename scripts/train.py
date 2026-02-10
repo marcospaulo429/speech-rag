@@ -3,6 +3,7 @@
 import argparse
 import yaml
 import torch
+import os
 from pathlib import Path
 import sys
 
@@ -10,7 +11,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models import TextEncoder, SpeechEncoder, SpeechAdapter
-from src.data import SpeechDataset
+# Added speech_collate_fn import
+from src.data import SpeechDataset, speech_collate_fn
 from src.training import Trainer, DistillationLoss
 
 
@@ -55,6 +57,9 @@ def main():
     # Device
     if args.device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Fallback for Mac M1/M2 if cuda is not available
+        if device == "cpu" and torch.backends.mps.is_available():
+            device = "mps"
     else:
         device = args.device
     
@@ -87,40 +92,56 @@ def main():
     print(f"Speech hidden dim: {speech_hidden_dim}")
     print(f"Adapter parameters: {sum(p.numel() for p in adapter.parameters()):,}")
     
-    # Load datasets
+    # --- LOAD DATASETS (UPDATED) ---
     print("Loading datasets...")
-    train_dataset = SpeechDataset(
-        dataset_name=config["data"]["dataset_name"],
-        dataset_config=config["data"].get("dataset_config"),
-        split="test",
-        sample_rate=config["data"]["sample_rate"],
-        max_audio_length=config["data"]["max_audio_length"],
-        cache_dir=config["paths"].get("data_dir")
-    )
     
-    val_dataset = None
-    try:
-        val_dataset = SpeechDataset(
-            dataset_name=config["data"]["dataset_name"],
-            dataset_config=config["data"].get("dataset_config"),
-            split="validation",
-            sample_rate=config["data"]["sample_rate"],
-            max_audio_length=config["data"]["max_audio_length"],
-            cache_dir=config["paths"].get("data_dir")
+    # Get data root from config, default to local 'data' folder
+    data_root = config["paths"].get("data_dir", "data")
+    
+    # 1. Training Set
+    # Maps to: data/spoken_train-v1.1.json AND data/train_wav
+    train_metadata = os.path.join(data_root, "spoken_train-v1.1.json")
+    train_audio_dir = os.path.join(data_root, "train_wav")
+    
+    if not os.path.exists(train_metadata) or not os.path.exists(train_audio_dir):
+        raise FileNotFoundError(
+            f"Training data not found at {train_metadata} or {train_audio_dir}"
         )
-        print(f"Validation dataset size: {len(val_dataset)}")
-    except Exception as e:
-        print(f"Could not load validation dataset: {e}")
-    
+
+    train_dataset = SpeechDataset(
+        metadata_path=train_metadata,
+        audio_dir=train_audio_dir,
+        sample_rate=config["data"]["sample_rate"],
+        max_audio_length=config["data"]["max_audio_length"]
+    )
     print(f"Training dataset size: {len(train_dataset)}")
-    
+
+    # 2. Validation Set
+    # Maps to: data/spoken_test-v1.1.json AND data/dev_wav
+    val_dataset = None
+    val_metadata = os.path.join(data_root, "spoken_test-v1.1.json")
+    val_audio_dir = os.path.join(data_root, "dev_wav")
+
+    if os.path.exists(val_metadata) and os.path.exists(val_audio_dir):
+        try:
+            val_dataset = SpeechDataset(
+                metadata_path=val_metadata,
+                audio_dir=val_audio_dir,
+                sample_rate=config["data"]["sample_rate"],
+                max_audio_length=config["data"]["max_audio_length"]
+            )
+            print(f"Validation dataset size: {len(val_dataset)}")
+        except Exception as e:
+            print(f"Could not load validation dataset: {e}")
+    else:
+        print(f"Warning: Validation data not found at {val_audio_dir}. Skipping validation.")
+
     # Loss function
     loss_fn = DistillationLoss(
         loss_type=config["training"]["loss_type"]
     )
     
     # Optimizer
-    # Convert learning_rate to float (YAML may read 1e-4 as string)
     learning_rate = float(config["training"]["learning_rate"])
     weight_decay = float(config["training"].get("weight_decay", 0.01))
     
@@ -131,6 +152,7 @@ def main():
     )
     
     # Create trainer
+    # NOTE: We pass 'collate_fn' here. Ensure your Trainer class accepts it!
     trainer = Trainer(
         text_encoder=text_encoder,
         speech_encoder=speech_encoder,
@@ -142,7 +164,8 @@ def main():
         device=device,
         output_dir=config["paths"]["output_dir"],
         use_wandb=not args.no_wandb,
-        project_name="speech-rag"
+        project_name="speech-rag",
+        collate_fn=speech_collate_fn  # <--- CRITICAL for padding
     )
     
     # Train
@@ -160,4 +183,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

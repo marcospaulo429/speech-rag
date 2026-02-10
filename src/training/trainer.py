@@ -3,11 +3,14 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 import os
 from tqdm import tqdm
 import wandb
 from pathlib import Path
+
+# Add src to path if needed, though usually handled by execution context
+import sys
 
 from ..models import TextEncoder, SpeechEncoder, SpeechAdapter
 from ..data import SpeechDataset
@@ -32,22 +35,9 @@ class Trainer:
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         output_dir: str = "outputs/",
         use_wandb: bool = True,
-        project_name: str = "speech-rag"
+        project_name: str = "speech-rag",
+        collate_fn: Optional[Callable] = None  # FIXED: Added default value = None
     ):
-        """
-        Args:
-            text_encoder: Frozen text encoder
-            speech_encoder: Frozen speech encoder
-            adapter: Trainable speech adapter
-            train_dataset: Training dataset
-            val_dataset: Validation dataset (optional)
-            loss_fn: Distillation loss function
-            optimizer: Optimizer (defaults to AdamW)
-            device: Device to train on
-            output_dir: Directory for checkpoints and logs
-            use_wandb: Whether to use wandb for logging
-            project_name: Wandb project name
-        """
         self.text_encoder = text_encoder.to(device)
         self.speech_encoder = speech_encoder.to(device)
         self.adapter = adapter.to(device)
@@ -56,6 +46,7 @@ class Trainer:
         self.device = device
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.collate_fn = collate_fn  # Store it for use in DataLoader
         
         # Loss function
         if loss_fn is None:
@@ -84,15 +75,7 @@ class Trainer:
         self.best_val_loss = float('inf')
     
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
-        """
-        Train for one epoch.
-        
-        Args:
-            dataloader: Training dataloader
-        
-        Returns:
-            Dictionary with training metrics
-        """
+        """Train for one epoch."""
         self.adapter.train()
         self.text_encoder.eval()
         self.speech_encoder.eval()
@@ -106,11 +89,14 @@ class Trainer:
         for batch in progress_bar:
             # Move to device
             audio = batch["audio"].to(self.device)
+            # Texts are usually a list of strings, so we don't .to(device) them directly
+            # The TextEncoder handles tokenization and device movement internally
             texts = batch["text"]
             
             # Forward pass
             # 1. Get speech representations from HuBERT
             with torch.no_grad():
+                # Note: Ensure your speech_encoder.encode handles padding masks if needed
                 speech_reprs = self.speech_encoder.encode(audio)
             
             # 2. Get text embeddings from E5-Mistral (ground truth)
@@ -141,8 +127,8 @@ class Trainer:
             
             # Update progress bar
             progress_bar.set_postfix({
-                "loss": loss.item(),
-                "sim": similarity
+                "loss": f"{loss.item():.4f}",
+                "sim": f"{similarity:.4f}"
             })
             
             # Logging
@@ -153,8 +139,8 @@ class Trainer:
                     "train/step": self.global_step
                 })
         
-        avg_loss = total_loss / num_batches
-        avg_similarity = total_similarity / num_batches
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        avg_similarity = total_similarity / num_batches if num_batches > 0 else 0.0
         
         return {
             "loss": avg_loss,
@@ -162,15 +148,7 @@ class Trainer:
         }
     
     def validate(self, dataloader: DataLoader) -> Dict[str, float]:
-        """
-        Validate on validation set.
-        
-        Args:
-            dataloader: Validation dataloader
-        
-        Returns:
-            Dictionary with validation metrics
-        """
+        """Validate on validation set."""
         self.adapter.eval()
         self.text_encoder.eval()
         self.speech_encoder.eval()
@@ -200,8 +178,8 @@ class Trainer:
                 total_similarity += similarity
                 num_batches += 1
         
-        avg_loss = total_loss / num_batches
-        avg_similarity = total_similarity / num_batches
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        avg_similarity = total_similarity / num_batches if num_batches > 0 else 0.0
         
         return {
             "loss": avg_loss,
@@ -213,13 +191,7 @@ class Trainer:
         checkpoint_name: str = "checkpoint.pt",
         is_best: bool = False
     ):
-        """
-        Save training checkpoint.
-        
-        Args:
-            checkpoint_name: Name of checkpoint file
-            is_best: Whether this is the best model so far
-        """
+        """Save training checkpoint."""
         checkpoint_path = self.output_dir / checkpoint_name
         
         checkpoint = {
@@ -237,12 +209,7 @@ class Trainer:
             torch.save(checkpoint, best_path)
     
     def load_checkpoint(self, checkpoint_path: str):
-        """
-        Load training checkpoint.
-        
-        Args:
-            checkpoint_path: Path to checkpoint file
-        """
+        """Load training checkpoint."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
         self.adapter.load_state_dict(checkpoint["adapter_state_dict"])
@@ -259,27 +226,19 @@ class Trainer:
         eval_steps: int = 500,
         resume_from: Optional[str] = None
     ):
-        """
-        Main training loop.
-        
-        Args:
-            num_epochs: Number of training epochs
-            batch_size: Batch size
-            save_steps: Save checkpoint every N steps
-            eval_steps: Evaluate every N steps
-            resume_from: Path to checkpoint to resume from
-        """
+        """Main training loop."""
         # Resume if specified
         if resume_from:
             self.load_checkpoint(resume_from)
             print(f"Resumed from checkpoint: {resume_from}")
         
         # Create dataloaders
+        # FIXED: Use self.collate_fn instead of calling non-existent get_collate_fn()
         train_loader = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=self.train_dataset.get_collate_fn(),
+            collate_fn=self.collate_fn,  
             num_workers=4,
             pin_memory=True
         )
@@ -290,7 +249,7 @@ class Trainer:
                 self.val_dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                collate_fn=self.val_dataset.get_collate_fn(),
+                collate_fn=self.collate_fn, # Use same collate_fn for val
                 num_workers=4,
                 pin_memory=True
             )
@@ -322,6 +281,7 @@ class Trainer:
                 is_best = val_metrics["loss"] < self.best_val_loss
                 if is_best:
                     self.best_val_loss = val_metrics["loss"]
+                    self.save_checkpoint("best_model.pt", is_best=True)
             
             # Save checkpoint
             if self.global_step % save_steps == 0:
@@ -330,4 +290,3 @@ class Trainer:
         # Final save
         self.save_checkpoint("final_checkpoint.pt", is_best=False)
         print("Training completed!")
-
