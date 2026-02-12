@@ -73,12 +73,9 @@ class Trainer:
         self.global_step = 0
         self.epoch = 0
         self.best_val_loss = float('inf')
-        self.early_stopping_patience = None
-        self.early_stopping_min_delta = 0.0
-        self.early_stopping_counter = 0
     
-    def train_epoch(self, dataloader: DataLoader, gradient_accumulation_steps: int = 1) -> Dict[str, float]:
-        """Train for one epoch with gradient accumulation support."""
+    def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
+        """Train for one epoch."""
         self.adapter.train()
         self.text_encoder.eval()
         self.speech_encoder.eval()
@@ -86,13 +83,10 @@ class Trainer:
         total_loss = 0.0
         total_similarity = 0.0
         num_batches = 0
-        accumulated_loss = 0.0
         
         progress_bar = tqdm(dataloader, desc=f"Epoch {self.epoch}")
         
-        self.optimizer.zero_grad()  # Zero gradients at the start of epoch
-        
-        for batch_idx, batch in enumerate(progress_bar):
+        for batch in progress_bar:
             # Move to device
             audio = batch["audio"].to(self.device)
             # Texts are usually a list of strings, so we don't .to(device) them directly
@@ -112,51 +106,40 @@ class Trainer:
             # 3. Get audio embeddings from adapter (trainable)
             audio_embeddings = self.adapter(speech_reprs)
             
-            # 4. Compute loss and normalize by accumulation steps
+            # 4. Compute loss
             loss = self.loss_fn(audio_embeddings, text_embeddings)
-            loss = loss / gradient_accumulation_steps  # Normalize loss
             
-            # 5. Backward pass (accumulate gradients)
+            # 5. Backward pass (only adapter parameters)
+            self.optimizer.zero_grad()
             loss.backward()
+            self.optimizer.step()
             
-            # Metrics (use non-normalized loss for logging)
+            # Metrics
             with torch.no_grad():
                 similarity = self.loss_fn.compute_similarity(
                     audio_embeddings, text_embeddings
                 ).mean().item()
             
-            accumulated_loss += loss.item() * gradient_accumulation_steps  # Denormalize for logging
+            total_loss += loss.item()
             total_similarity += similarity
             num_batches += 1
-            
-            # Update optimizer every gradient_accumulation_steps
-            if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                self.global_step += 1
-                
-                # Update progress bar with accumulated loss
-                avg_loss_so_far = accumulated_loss / num_batches
-                progress_bar.set_postfix({
-                    "loss": f"{avg_loss_so_far:.4f}",
-                    "sim": f"{similarity:.4f}"
-                })
-                
-                # Logging
-                if self.use_wandb and self.global_step % 100 == 0:
-                    wandb.log({
-                        "train/loss": avg_loss_so_far,
-                        "train/similarity": similarity,
-                        "train/step": self.global_step
-                    })
-        
-        # Handle remaining gradients if batch doesn't divide evenly
-        if num_batches % gradient_accumulation_steps != 0:
-            self.optimizer.step()
-            self.optimizer.zero_grad()
             self.global_step += 1
+            
+            # Update progress bar
+            progress_bar.set_postfix({
+                "loss": f"{loss.item():.4f}",
+                "sim": f"{similarity:.4f}"
+            })
+            
+            # Logging
+            if self.use_wandb and self.global_step % 100 == 0:
+                wandb.log({
+                    "train/loss": loss.item(),
+                    "train/similarity": similarity,
+                    "train/step": self.global_step
+                })
         
-        avg_loss = accumulated_loss / num_batches if num_batches > 0 else 0.0
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         avg_similarity = total_similarity / num_batches if num_batches > 0 else 0.0
         
         return {
@@ -241,21 +224,13 @@ class Trainer:
         batch_size: int = 16,
         save_steps: int = 1000,
         eval_steps: int = 500,
-        resume_from: Optional[str] = None,
-        gradient_accumulation_steps: int = 1,
-        early_stopping_patience: Optional[int] = None,
-        early_stopping_min_delta: float = 0.0
+        resume_from: Optional[str] = None
     ):
-        """Main training loop with early stopping and gradient accumulation."""
+        """Main training loop."""
         # Resume if specified
         if resume_from:
             self.load_checkpoint(resume_from)
             print(f"Resumed from checkpoint: {resume_from}")
-        
-        # Set early stopping parameters
-        self.early_stopping_patience = early_stopping_patience
-        self.early_stopping_min_delta = early_stopping_min_delta
-        self.early_stopping_counter = 0
         
         # Create dataloaders
         # FIXED: Use self.collate_fn instead of calling non-existent get_collate_fn()
@@ -284,14 +259,13 @@ class Trainer:
             self.epoch = epoch
             
             # Train
-            train_metrics = self.train_epoch(train_loader, gradient_accumulation_steps)
+            train_metrics = self.train_epoch(train_loader)
             
             print(f"Epoch {epoch} - Train Loss: {train_metrics['loss']:.4f}, "
                   f"Similarity: {train_metrics['similarity']:.4f}")
             
-            # Validate every epoch if validation dataset exists
-            # (Early stopping requires validation every epoch)
-            if val_loader:
+            # Validate
+            if val_loader and (self.global_step % eval_steps == 0):
                 val_metrics = self.validate(val_loader)
                 print(f"Epoch {epoch} - Val Loss: {val_metrics['loss']:.4f}, "
                       f"Similarity: {val_metrics['similarity']:.4f}")
@@ -303,23 +277,11 @@ class Trainer:
                         "val/epoch": epoch
                     })
                 
-                # Save best model and check for improvement
-                is_best = val_metrics["loss"] < (self.best_val_loss - early_stopping_min_delta)
+                # Save best model
+                is_best = val_metrics["loss"] < self.best_val_loss
                 if is_best:
                     self.best_val_loss = val_metrics["loss"]
-                    self.early_stopping_counter = 0
                     self.save_checkpoint("best_model.pt", is_best=True)
-                    print(f"✓ Best model saved! Val loss: {val_metrics['loss']:.4f}")
-                else:
-                    # Only increment counter if early stopping is enabled
-                    if early_stopping_patience is not None:
-                        self.early_stopping_counter += 1
-                
-                # Check early stopping (only if enabled)
-                if early_stopping_patience is not None and self.early_stopping_counter >= early_stopping_patience:
-                    print(f"\nEarly stopping triggered! No improvement for {early_stopping_patience} epochs.")
-                    print(f"Best validation loss: {self.best_val_loss:.4f}")
-                    break
             
             # Save checkpoint
             if self.global_step % save_steps == 0:
