@@ -1,267 +1,103 @@
-"""Dataset loader for Spoken Squad and other speech datasets"""
-
+import json
+import os
 import torch
-from torch.utils.data import Dataset
-from typing import Dict, List, Optional, Union
-from datasets import load_dataset, Dataset as HFDataset
-from .preprocessing import AudioPreprocessor
-import numpy as np
-import io
 import soundfile as sf
-
+from torch.utils.data import Dataset
+from typing import Dict, List, Optional
+from pathlib import Path
+from .preprocessing import AudioPreprocessor
 
 class SpeechDataset(Dataset):
-    """
-    Dataset for speech-text pairs.
-    Supports Spoken Squad and other HuggingFace datasets.
-    """
-    
     def __init__(
-        self,
-        dataset_name: str = "AudioLLMs/spoken_squad_test",
-        dataset_config: Optional[str] = None,
-        split: str = "test",
-        audio_column: str = "audio",
-        text_column: str = "passage_text",
+        self, 
+        metadata_path: str, 
+        audio_dir: str, 
         sample_rate: int = 16000,
-        max_audio_length: float = 60.0,
-        cache_dir: Optional[str] = None,
-        streaming: bool = False
+        max_audio_length: float = 60.0
     ):
-        """
-        Args:
-            dataset_name: HuggingFace dataset name (default: "AudioLLMs/spoken_squad_test")
-            dataset_config: Dataset configuration (None for Spoken Squad)
-            split: Dataset split (train, validation, test)
-            audio_column: Column name for audio data (default: "audio")
-            text_column: Column name for text transcriptions (default: "passage_text")
-            sample_rate: Target sample rate
-            max_audio_length: Maximum audio length in seconds
-            cache_dir: Cache directory for datasets
-            streaming: Whether to use streaming mode
-        """
-        self.dataset_name = dataset_name
-        self.dataset_config = dataset_config
-        self.split = split
-        self.audio_column = audio_column
-        self.text_column = text_column
+        self.audio_dir = Path(audio_dir)
         self.sample_rate = sample_rate
-        self.max_audio_length = max_audio_length
-        
-        # Initialize preprocessor
         self.preprocessor = AudioPreprocessor(
             target_sample_rate=sample_rate,
             max_length_seconds=max_audio_length
         )
         
-        # Load dataset
-        # Keep as Arrow dataset to avoid automatic audio decoding (which requires torchcodec)
-        try:
-            if dataset_config:
-                self.dataset = load_dataset(
-                    dataset_name,
-                    dataset_config,
-                    split=split,
-                    cache_dir=cache_dir,
-                    streaming=streaming
-                )
-            else:
-                # For Spoken Squad and datasets without config
-                self.dataset = load_dataset(
-                    dataset_name,
-                    split=split,
-                    cache_dir=cache_dir,
-                    streaming=streaming
-                )
-        except Exception as e:
-            raise ValueError(
-                f"Failed to load dataset {dataset_name} with config {dataset_config}: {e}\n"
-                f"Make sure the dataset is available on HuggingFace or provide a custom loader."
-            )
+        print(f"Loading metadata from {metadata_path}...")
+        with open(metadata_path, 'r') as f:
+            raw_data = json.load(f)
+
+        self.samples = []
+        missing_count = 0
         
-        # Disable automatic audio decoding to avoid torchcodec requirement
-        # Use with_format(None) to get raw Arrow data without any decoding
-        if not streaming:
-            try:
-                # Disable all formatting to get raw data
-                # This prevents HuggingFace from trying to decode audio with torchcodec
-                self.dataset = self.dataset.with_format(None)
-            except Exception:
-                # If with_format fails, try set_format
-                try:
-                    self.dataset.set_format(None)
-                except Exception:
-                    # If both fail, we'll handle raw bytes in __getitem__
-                    pass
+        # --- NEW LOGIC: Construct filenames based on INDEX ---
+        # Format: {article_idx}_{paragraph_idx}_{qa_idx}.wav
         
-        # Do NOT convert to list - keep as Arrow dataset to avoid automatic decoding
-        # We'll decode audio manually in __getitem__ when needed
-    
-    def _decode_audio(self, audio_data) -> tuple:
-        """
-        Decode audio data manually without requiring torchcodec.
+        for article_idx, article in enumerate(raw_data['data']):
+            for para_idx, paragraph in enumerate(article['paragraphs']):
+                context_text = paragraph['context']
+                
+                for qa_idx, qa in enumerate(paragraph['qas']):
+                    question = qa['question']
+                    
+                    # Construct the filename expected by Spoken-SQuAD structure
+                    filename = f"{article_idx}_{para_idx}_{qa_idx}.wav"
+                    audio_path = self.audio_dir / filename
+                    
+                    if audio_path.exists():
+                        self.samples.append({
+                            "id": f"{article_idx}_{para_idx}_{qa_idx}", # Use our generated ID
+                            "audio_path": str(audio_path),
+                            "text": context_text,
+                            "question": question
+                        })
+                    else:
+                        missing_count += 1
+
+        print(f"Matched {len(self.samples)} samples. (Missing/Skipped: {missing_count})")
         
-        Args:
-            audio_data: Audio data in various formats (dict, bytes, array, etc.)
-        
-        Returns:
-            Tuple of (waveform: torch.Tensor, sample_rate: int)
-        """
-        # If already decoded (dict format from HuggingFace)
-        if isinstance(audio_data, dict):
-            if "array" in audio_data:
-                audio_array = audio_data["array"]
-                audio_sr = audio_data.get("sampling_rate", self.sample_rate)
-                waveform = torch.from_numpy(audio_array).float()
-                return waveform, audio_sr
-        
-        # If it's a numpy array
-        if isinstance(audio_data, np.ndarray):
-            waveform = torch.from_numpy(audio_data).float()
-            return waveform, self.sample_rate
-        
-        # If it's already a torch tensor
-        if isinstance(audio_data, torch.Tensor):
-            return audio_data, self.sample_rate
-        
-        # If it's bytes (compressed audio), decode with soundfile
-        if isinstance(audio_data, bytes):
-            try:
-                # Decode using soundfile (doesn't require torchcodec)
-                audio_array, audio_sr = sf.read(io.BytesIO(audio_data))
-                waveform = torch.from_numpy(audio_array).float()
-                # Convert to mono if stereo
-                if len(waveform.shape) > 1:
-                    waveform = torch.mean(waveform, dim=-1)
-                return waveform, audio_sr
-            except Exception as e:
-                # Fallback to librosa
-                try:
-                    import librosa
-                    audio_array, audio_sr = librosa.load(
-                        io.BytesIO(audio_data), 
-                        sr=None, 
-                        mono=True
-                    )
-                    waveform = torch.from_numpy(audio_array).float()
-                    return waveform, audio_sr
-                except Exception as e2:
-                    raise ValueError(
-                        f"Failed to decode audio data: {e}. Tried soundfile and librosa."
-                    )
-        
-        # If it's a file path (string)
-        if isinstance(audio_data, str):
-            return self.preprocessor.load_audio(audio_data)
-        
-        # Try to access as if it's an Audio object with bytes
-        try:
-            if hasattr(audio_data, 'bytes'):
-                # Audio object with bytes attribute
-                return self._decode_audio(audio_data.bytes)
-            elif hasattr(audio_data, 'path'):
-                # Audio object with path attribute
-                return self.preprocessor.load_audio(audio_data.path)
-        except Exception:
-            pass
-        
-        # Last resort: try to convert to numpy and then to tensor
-        try:
-            audio_array = np.array(audio_data)
-            waveform = torch.from_numpy(audio_array).float()
-            return waveform, self.sample_rate
-        except Exception as e:
-            raise ValueError(
-                f"Could not decode audio data of type {type(audio_data)}: {e}"
-            )
-    
-    def __len__(self) -> int:
-        """Get dataset length"""
-        # Arrow dataset supports len() directly
-        if hasattr(self.dataset, '__len__'):
-            return len(self.dataset)
-        else:
-            # Streaming dataset - return a large number
-            return 1000000
-    
-    def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
-        """
-        Get a single sample.
-        
-        Args:
-            idx: Sample index
-        
-        Returns:
-            Dictionary with 'audio' (tensor) and 'text' (string)
-        """
-        # Access dataset - should now have raw bytes instead of decoded audio
-        # This avoids the torchcodec requirement
-        try:
-            sample = self.dataset[idx]
-            audio_data = sample[self.audio_column]
-            text = sample[self.text_column]
-        except Exception as e:
-            # If access fails, try with format disabled
-            try:
-                original_format = getattr(self.dataset, '_format_type', None)
-                self.dataset = self.dataset.with_format(None)
-                sample = self.dataset[idx]
-                audio_data = sample[self.audio_column]
-                text = sample[self.text_column]
-            except Exception as e2:
-                raise ValueError(
-                    f"Failed to access dataset sample {idx}: {e}. "
-                    f"Tried with format disabled: {e2}"
-                )
-        
-        # Decode audio manually using our helper method
-        # This avoids requiring torchcodec
-        waveform, audio_sr = self._decode_audio(audio_data)
-        
-        # Preprocess audio (resample, normalize, trim)
-        waveform = self.preprocessor.process(waveform, sample_rate=audio_sr)
-        
-        # Ensure text is string
-        if not isinstance(text, str):
-            text = str(text)
+        if len(self.samples) == 0:
+             # Fallback debug: print what we TRIED to look for
+            print(f"DEBUG: First expected file was {self.audio_dir}/0_0_0.wav")
+            raise ValueError(f"No valid samples found in {audio_dir}")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        waveform = self.preprocessor.process(item["audio_path"])
         
         return {
             "audio": waveform,
-            "text": text,
-            "sample_rate": self.sample_rate
+            "text": item["text"],
+            "query": item["question"]
         }
-    
-    def get_collate_fn(self):
-        """
-        Get collate function for DataLoader.
-        Handles variable-length audio sequences.
-        """
-        def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-            """
-            Collate function that pads audio sequences.
-            
-            Args:
-                batch: List of samples
-            
-            Returns:
-                Batched tensors
-            """
-            texts = [item["text"] for item in batch]
-            audios = [item["audio"] for item in batch]
-            
-            # Pad audio sequences to same length
-            max_len = max(audio.shape[-1] for audio in audios)
-            padded_audios = []
-            for audio in audios:
-                pad_len = max_len - audio.shape[-1]
-                padded = torch.nn.functional.pad(audio, (0, pad_len))
-                padded_audios.append(padded)
-            
-            return {
-                "audio": torch.stack(padded_audios),
-                "text": texts,
-                "sample_rate": torch.tensor([item["sample_rate"] for item in batch])
-            }
-        
-        return collate_fn
 
+def speech_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+    # Filter failed loads
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None
+    
+    audios = [item["audio"] for item in batch]
+    texts = [item["text"] for item in batch]
+    queries = [item["query"] for item in batch]
+    
+    # Pad Audios
+    lengths = torch.tensor([audio.shape[0] for audio in audios])
+    max_len = lengths.max().item()
+    
+    padded_audios = torch.zeros(len(audios), max_len)
+    attention_masks = torch.zeros(len(audios), max_len)
+    
+    for i, audio in enumerate(audios):
+        end = audio.shape[0]
+        padded_audios[i, :end] = audio
+        attention_masks[i, :end] = 1
+        
+    return {
+        "audio": padded_audios,
+        "attention_mask": attention_masks,
+        "text": texts,
+        "query": queries
+    }
