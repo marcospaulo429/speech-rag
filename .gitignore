@@ -78,3 +78,8 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+src/data/train_wav/
+src/data/dev_wav/
+src/data/spoken_train-v1.1.json
+src/data/spoken_test-v1.1.json
