@@ -1,4 +1,4 @@
-"""Text Encoder supporting E5-Mistral-7B-Instruct and Qwen3-Embedding-0.6B"""
+"""Text Encoder supporting E5-Mistral-7B-Instruct, Qwen3-Embedding-0.6B, and Qwen3-Embedding-4B"""
 
 import torch
 import torch.nn as nn
@@ -6,13 +6,36 @@ from transformers import AutoModel, AutoTokenizer
 from typing import List, Union, Optional
 
 
+def last_token_pool(last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """
+    Last token pooling for Qwen3-Embedding models (recommended for Qwen3-Embedding-4B).
+    
+    Args:
+        last_hidden_states: Hidden states from model output, shape (batch_size, seq_len, hidden_dim)
+        attention_mask: Attention mask, shape (batch_size, seq_len)
+    
+    Returns:
+        Pooled embeddings, shape (batch_size, hidden_dim)
+    """
+    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+    if left_padding:
+        return last_hidden_states[:, -1]
+    else:
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
+
+
 class TextEncoder(nn.Module):
     """
     Text encoder wrapper supporting multiple embedding models:
     - E5-Mistral-7B-Instruct (4096 dim)
     - Qwen3-Embedding-0.6B (1024 dim)
+    - Qwen3-Embedding-4B (2560 dim)
     
     Generates normalized text embeddings.
+    For Qwen3-Embedding-4B, uses last token pooling (recommended by the model authors).
+    For other models, uses mean pooling or pooler_output.
     """
     
     def __init__(
@@ -35,8 +58,16 @@ class TextEncoder(nn.Module):
         self.is_qwen3 = "qwen3" in model_name.lower() or "qwen" in model_name.lower()
         self.is_e5 = "e5" in model_name.lower()
         
+        # Detect if it's Qwen3-Embedding-4B (uses last token pooling)
+        self.is_qwen3_4b = "qwen3-embedding-4b" in model_name.lower() or "qwen3-embedding-4b" in model_name.lower()
+        
         # Load tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Configure tokenizer padding side for Qwen3-Embedding-4B (recommended for better performance)
+        if self.is_qwen3_4b:
+            self.tokenizer.padding_side = "left"
+        
         self.model = AutoModel.from_pretrained(model_name)
         
         # Freeze all parameters
@@ -47,6 +78,7 @@ class TextEncoder(nn.Module):
         
         # Get embedding dimension
         # Qwen3-Embedding-0.6B has configurable dimensions (32-1024), default is 1024
+        # Qwen3-Embedding-4B has configurable dimensions (32-2560), default is 2560
         # Check if model has embedding_size attribute (Qwen3) or hidden_size (E5)
         if hasattr(self.model.config, 'embedding_size'):
             self.embedding_dim = self.model.config.embedding_size
@@ -63,6 +95,10 @@ class TextEncoder(nn.Module):
                     self.embedding_dim = dummy_output.pooler_output.shape[-1]
                 else:
                     raise ValueError(f"Could not determine embedding dimension for {model_name}")
+        
+        # Verify if it's 4B model by dimension (2560) if not detected by name
+        if self.is_qwen3 and self.embedding_dim == 2560 and not self.is_qwen3_4b:
+            self.is_qwen3_4b = True
     
     def encode(
         self,
@@ -121,12 +157,17 @@ class TextEncoder(nn.Module):
                 # Some models have pooler_output (e.g., BERT-style)
                 embeddings = outputs.pooler_output
             elif hasattr(outputs, 'last_hidden_state'):
-                # Use mean pooling over sequence length
                 attention_mask = encoded["attention_mask"]
-                # Sum embeddings over sequence dimension
-                embeddings = outputs.last_hidden_state * attention_mask.unsqueeze(-1)
-                # Average over sequence length (excluding padding)
-                embeddings = embeddings.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+                
+                # Qwen3-Embedding-4B uses last token pooling (recommended)
+                if self.is_qwen3_4b:
+                    embeddings = last_token_pool(outputs.last_hidden_state, attention_mask)
+                else:
+                    # Use mean pooling over sequence length for other models
+                    # Sum embeddings over sequence dimension
+                    embeddings = outputs.last_hidden_state * attention_mask.unsqueeze(-1)
+                    # Average over sequence length (excluding padding)
+                    embeddings = embeddings.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
             else:
                 # Fallback: try to get embeddings from outputs
                 if hasattr(outputs, 'embeddings'):

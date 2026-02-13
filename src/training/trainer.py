@@ -131,7 +131,7 @@ class Trainer:
                 # Note: Ensure your speech_encoder.encode handles padding masks if needed
                 speech_reprs = self.speech_encoder.encode(audio)
             
-            # 2. Get text embeddings from E5-Mistral (ground truth)
+            # 2. Get text embeddings from text encoder (ground truth)
             with torch.no_grad():
                 text_embeddings = self.text_encoder.encode(texts, device=self.device)
             
