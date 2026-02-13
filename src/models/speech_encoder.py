@@ -71,8 +71,18 @@ class SpeechEncoder(nn.Module):
         """
         # Load audio if path provided
         if isinstance(audio, str):
-            waveform, sr = torchaudio.load(audio)
-            sample_rate = sr
+            try:
+                # Try with soundfile backend first (more stable, doesn't require torchcodec)
+                waveform, sr = torchaudio.load(audio, backend="soundfile")
+                sample_rate = sr
+            except Exception:
+                # Fallback to librosa if torchaudio fails (e.g., torchcodec not available)
+                import librosa
+                waveform, sr = librosa.load(audio, sr=None, mono=True)
+                waveform = torch.from_numpy(waveform).float()
+                if len(waveform.shape) == 1:
+                    waveform = waveform.unsqueeze(0)
+                sample_rate = sr
         elif isinstance(audio, np.ndarray):
             waveform = torch.from_numpy(audio).float()
             if len(waveform.shape) == 1:
