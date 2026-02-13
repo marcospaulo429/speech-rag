@@ -45,9 +45,12 @@ training:
   early_stopping_patience: 3
   early_stopping_min_delta: 0.0  # Melhoria mínima para considerar como melhoria
   
-  save_steps: 1000
+  save_steps: 500
   eval_steps: 500
   logging_steps: 100
+  
+  # Frequência de logging por batch (1 = cada batch, 10 = a cada 10 batches, etc.)
+  log_batch_frequency: 1
   
 generation:
   model_name: "Qwen/Qwen-Audio-Chat"

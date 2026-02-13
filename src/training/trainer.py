@@ -2,12 +2,14 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from typing import Optional, Dict, Any, Callable
 import os
 from tqdm import tqdm
 import wandb
 from pathlib import Path
+import time
 
 # Add src to path if needed, though usually handled by execution context
 import sys
@@ -36,7 +38,8 @@ class Trainer:
         output_dir: str = "outputs/",
         use_wandb: bool = True,
         project_name: str = "speech-rag",
-        collate_fn: Optional[Callable] = None  # FIXED: Added default value = None
+        collate_fn: Optional[Callable] = None,  # FIXED: Added default value = None
+        config: Optional[Dict] = None  # Config dict for logging hyperparameters
     ):
         self.text_encoder = text_encoder.to(device)
         self.speech_encoder = speech_encoder.to(device)
@@ -67,7 +70,9 @@ class Trainer:
         # Wandb
         self.use_wandb = use_wandb
         if use_wandb:
-            wandb.init(project=project_name, config={})
+            # Log config if provided, otherwise empty dict
+            wandb_config = config if config is not None else {}
+            wandb.init(project=project_name, config=wandb_config)
         
         # Training state
         self.global_step = 0
@@ -77,7 +82,19 @@ class Trainer:
         self.early_stopping_min_delta = 0.0
         self.early_stopping_counter = 0
     
-    def train_epoch(self, dataloader: DataLoader, gradient_accumulation_steps: int = 1) -> Dict[str, float]:
+    def _compute_entropy(self, embeddings: torch.Tensor) -> float:
+        """Compute entropy of normalized embeddings."""
+        # Normalize embeddings
+        normalized = F.normalize(embeddings, p=2, dim=-1)
+        # Compute dot products (similarity matrix)
+        similarity_matrix = torch.mm(normalized, normalized.t())
+        # Convert to probabilities (softmax over each row)
+        probs = F.softmax(similarity_matrix, dim=-1)
+        # Compute entropy: -sum(p * log(p))
+        entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=-1).mean().item()
+        return entropy
+    
+    def train_epoch(self, dataloader: DataLoader, gradient_accumulation_steps: int = 1, log_batch_frequency: int = 1) -> Dict[str, float]:
         """Train for one epoch with gradient accumulation support."""
         self.adapter.train()
         self.text_encoder.eval()
@@ -88,7 +105,16 @@ class Trainer:
         num_batches = 0
         accumulated_loss = 0.0
         
+        # Metrics accumulation
+        total_grad_norm = 0.0
+        total_audio_norm = 0.0
+        total_text_norm = 0.0
+        total_alignment_distance = 0.0
+        total_entropy = 0.0
+        grad_norm_count = 0
+        
         progress_bar = tqdm(dataloader, desc=f"Epoch {self.epoch}")
+        epoch_start_time = time.time()
         
         self.optimizer.zero_grad()  # Zero gradients at the start of epoch
         
@@ -124,16 +150,59 @@ class Trainer:
                 similarity = self.loss_fn.compute_similarity(
                     audio_embeddings, text_embeddings
                 ).mean().item()
+                
+                # Embedding statistics
+                audio_norm = audio_embeddings.norm(dim=-1).mean().item()
+                text_norm = text_embeddings.norm(dim=-1).mean().item()
+                alignment_distance = (audio_embeddings - text_embeddings).norm(dim=-1).mean().item()
+                
+                # Entropy
+                entropy = self._compute_entropy(audio_embeddings)
             
             accumulated_loss += loss.item() * gradient_accumulation_steps  # Denormalize for logging
             total_similarity += similarity
+            total_audio_norm += audio_norm
+            total_text_norm += text_norm
+            total_alignment_distance += alignment_distance
+            total_entropy += entropy
             num_batches += 1
             
             # Update optimizer every gradient_accumulation_steps
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                # Compute gradient norm before step
+                grad_norm = 0.0
+                for param in self.adapter.parameters():
+                    if param.grad is not None:
+                        grad_norm += param.grad.data.norm(2).item() ** 2
+                grad_norm = grad_norm ** 0.5
+                total_grad_norm += grad_norm
+                grad_norm_count += 1
+                
+                # Get current learning rate
+                current_lr = self.optimizer.param_groups[0]['lr']
+                
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 self.global_step += 1
+                
+                # Denormalize loss for batch logging
+                batch_loss = loss.item() * gradient_accumulation_steps
+                
+                # Logging por batch (se configurado)
+                if self.use_wandb and (self.global_step % log_batch_frequency == 0 or log_batch_frequency == 1):
+                    wandb.log({
+                        "batch/loss": batch_loss,
+                        "batch/similarity": similarity,
+                        "batch/grad_norm": grad_norm,
+                        "batch/audio_norm": audio_norm,
+                        "batch/text_norm": text_norm,
+                        "batch/alignment_distance": alignment_distance,
+                        "batch/entropy": entropy,
+                        "batch/learning_rate": current_lr,
+                        "batch/step": self.global_step,
+                        "batch/batch_idx": batch_idx + 1,
+                        "batch/epoch": self.epoch
+                    })
                 
                 # Update progress bar with accumulated loss
                 avg_loss_so_far = accumulated_loss / num_batches
@@ -142,26 +211,54 @@ class Trainer:
                     "sim": f"{similarity:.4f}"
                 })
                 
-                # Logging
+                # Logging agregado a cada 100 steps (mantido para compatibilidade)
                 if self.use_wandb and self.global_step % 100 == 0:
+                    avg_grad_norm = total_grad_norm / grad_norm_count if grad_norm_count > 0 else 0.0
                     wandb.log({
                         "train/loss": avg_loss_so_far,
                         "train/similarity": similarity,
-                        "train/step": self.global_step
+                        "train/step": self.global_step,
+                        "train/learning_rate": current_lr,
+                        "train/grad_norm": avg_grad_norm,
+                        "train/audio_norm": total_audio_norm / num_batches,
+                        "train/text_norm": total_text_norm / num_batches,
+                        "train/alignment_distance": total_alignment_distance / num_batches,
+                        "train/entropy": total_entropy / num_batches
                     })
+                    # Reset accumulators for next logging period
+                    total_grad_norm = 0.0
+                    grad_norm_count = 0
         
         # Handle remaining gradients if batch doesn't divide evenly
         if num_batches % gradient_accumulation_steps != 0:
+            # Compute gradient norm before step
+            grad_norm = 0.0
+            for param in self.adapter.parameters():
+                if param.grad is not None:
+                    grad_norm += param.grad.data.norm(2).item() ** 2
+            grad_norm = grad_norm ** 0.5
+            total_grad_norm += grad_norm
+            grad_norm_count += 1
+            
             self.optimizer.step()
             self.optimizer.zero_grad()
             self.global_step += 1
         
+        epoch_time = time.time() - epoch_start_time
+        
         avg_loss = accumulated_loss / num_batches if num_batches > 0 else 0.0
         avg_similarity = total_similarity / num_batches if num_batches > 0 else 0.0
+        avg_grad_norm = total_grad_norm / grad_norm_count if grad_norm_count > 0 else 0.0
         
         return {
             "loss": avg_loss,
-            "similarity": avg_similarity
+            "similarity": avg_similarity,
+            "grad_norm": avg_grad_norm,
+            "audio_norm": total_audio_norm / num_batches if num_batches > 0 else 0.0,
+            "text_norm": total_text_norm / num_batches if num_batches > 0 else 0.0,
+            "alignment_distance": total_alignment_distance / num_batches if num_batches > 0 else 0.0,
+            "entropy": total_entropy / num_batches if num_batches > 0 else 0.0,
+            "epoch_time": epoch_time
         }
     
     def validate(self, dataloader: DataLoader) -> Dict[str, float]:
@@ -173,6 +270,12 @@ class Trainer:
         total_loss = 0.0
         total_similarity = 0.0
         num_batches = 0
+        
+        # Metrics accumulation
+        total_audio_norm = 0.0
+        total_text_norm = 0.0
+        total_alignment_distance = 0.0
+        total_entropy = 0.0
         
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Validation"):
@@ -191,8 +294,20 @@ class Trainer:
                     audio_embeddings, text_embeddings
                 ).mean().item()
                 
+                # Embedding statistics
+                audio_norm = audio_embeddings.norm(dim=-1).mean().item()
+                text_norm = text_embeddings.norm(dim=-1).mean().item()
+                alignment_distance = (audio_embeddings - text_embeddings).norm(dim=-1).mean().item()
+                
+                # Entropy
+                entropy = self._compute_entropy(audio_embeddings)
+                
                 total_loss += loss.item()
                 total_similarity += similarity
+                total_audio_norm += audio_norm
+                total_text_norm += text_norm
+                total_alignment_distance += alignment_distance
+                total_entropy += entropy
                 num_batches += 1
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -200,7 +315,11 @@ class Trainer:
         
         return {
             "loss": avg_loss,
-            "similarity": avg_similarity
+            "similarity": avg_similarity,
+            "audio_norm": total_audio_norm / num_batches if num_batches > 0 else 0.0,
+            "text_norm": total_text_norm / num_batches if num_batches > 0 else 0.0,
+            "alignment_distance": total_alignment_distance / num_batches if num_batches > 0 else 0.0,
+            "entropy": total_entropy / num_batches if num_batches > 0 else 0.0
         }
     
     def save_checkpoint(
@@ -244,7 +363,8 @@ class Trainer:
         resume_from: Optional[str] = None,
         gradient_accumulation_steps: int = 1,
         early_stopping_patience: Optional[int] = None,
-        early_stopping_min_delta: float = 0.0
+        early_stopping_min_delta: float = 0.0,
+        log_batch_frequency: int = 1
     ):
         """Main training loop with early stopping and gradient accumulation."""
         # Resume if specified
@@ -284,7 +404,7 @@ class Trainer:
             self.epoch = epoch
             
             # Train
-            train_metrics = self.train_epoch(train_loader, gradient_accumulation_steps)
+            train_metrics = self.train_epoch(train_loader, gradient_accumulation_steps, log_batch_frequency)
             
             print(f"Epoch {epoch} - Train Loss: {train_metrics['loss']:.4f}, "
                   f"Similarity: {train_metrics['similarity']:.4f}")
@@ -296,11 +416,33 @@ class Trainer:
                 print(f"Epoch {epoch} - Val Loss: {val_metrics['loss']:.4f}, "
                       f"Similarity: {val_metrics['similarity']:.4f}")
                 
+                # Compute train/val gap
+                train_val_gap = train_metrics["loss"] - val_metrics["loss"]
+                
+                # Log metrics per epoch with epoch/ prefix
                 if self.use_wandb:
                     wandb.log({
-                        "val/loss": val_metrics["loss"],
-                        "val/similarity": val_metrics["similarity"],
-                        "val/epoch": epoch
+                        # Train metrics
+                        "epoch/train/loss": train_metrics["loss"],
+                        "epoch/train/similarity": train_metrics["similarity"],
+                        "epoch/train/grad_norm": train_metrics.get("grad_norm", 0.0),
+                        "epoch/train/audio_norm": train_metrics.get("audio_norm", 0.0),
+                        "epoch/train/text_norm": train_metrics.get("text_norm", 0.0),
+                        "epoch/train/alignment_distance": train_metrics.get("alignment_distance", 0.0),
+                        "epoch/train/entropy": train_metrics.get("entropy", 0.0),
+                        "epoch/train/time": train_metrics.get("epoch_time", 0.0),
+                        # Val metrics
+                        "epoch/val/loss": val_metrics["loss"],
+                        "epoch/val/similarity": val_metrics["similarity"],
+                        "epoch/val/audio_norm": val_metrics.get("audio_norm", 0.0),
+                        "epoch/val/text_norm": val_metrics.get("text_norm", 0.0),
+                        "epoch/val/alignment_distance": val_metrics.get("alignment_distance", 0.0),
+                        "epoch/val/entropy": val_metrics.get("entropy", 0.0),
+                        # Comparative metrics
+                        "epoch/train_val_gap": train_val_gap,
+                        "epoch/best_val_loss": self.best_val_loss,
+                        "epoch/early_stopping_counter": self.early_stopping_counter,
+                        "epoch/epoch": epoch
                     })
                 
                 # Save best model and check for improvement

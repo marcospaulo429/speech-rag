@@ -181,7 +181,8 @@ def main():
         output_dir=config["paths"]["output_dir"],
         use_wandb=not args.no_wandb,
         project_name="speech-rag",
-        collate_fn=speech_collate_fn  # <--- CRITICAL for padding
+        collate_fn=speech_collate_fn,  # <--- CRITICAL for padding
+        config=config  # Pass config for wandb logging
     )
     
     # Train
@@ -194,7 +195,8 @@ def main():
         resume_from=args.resume,
         gradient_accumulation_steps=config["training"].get("gradient_accumulation_steps", 1),
         early_stopping_patience=config["training"].get("early_stopping_patience"),
-        early_stopping_min_delta=config["training"].get("early_stopping_min_delta", 0.0)
+        early_stopping_min_delta=config["training"].get("early_stopping_min_delta", 0.0),
+        log_batch_frequency=config["training"].get("log_batch_frequency", 1)
     )
     
     print("Training completed!")
