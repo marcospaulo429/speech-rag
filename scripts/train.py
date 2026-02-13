@@ -144,12 +144,28 @@ def main():
     # Optimizer
     learning_rate = float(config["training"]["learning_rate"])
     weight_decay = float(config["training"].get("weight_decay", 0.01))
+    optimizer_type = config["training"].get("optimizer", "adamw").lower()
     
-    optimizer = torch.optim.AdamW(
-        adapter.parameters(),
-        lr=learning_rate,
-        weight_decay=weight_decay
-    )
+    # Get beta parameters for Adam/AdamW
+    beta1 = float(config["training"].get("beta1", 0.9))
+    beta2 = float(config["training"].get("beta2", 0.999))
+    
+    if optimizer_type == "adam":
+        optimizer = torch.optim.Adam(
+            adapter.parameters(),
+            lr=learning_rate,
+            betas=(beta1, beta2),
+            weight_decay=weight_decay
+        )
+    elif optimizer_type == "adamw":
+        optimizer = torch.optim.AdamW(
+            adapter.parameters(),
+            lr=learning_rate,
+            betas=(beta1, beta2),
+            weight_decay=weight_decay
+        )
+    else:
+        raise ValueError(f"Unknown optimizer type: {optimizer_type}. Use 'adam' or 'adamw'")
     
     # Create trainer
     # NOTE: We pass 'collate_fn' here. Ensure your Trainer class accepts it!
@@ -165,7 +181,8 @@ def main():
         output_dir=config["paths"]["output_dir"],
         use_wandb=not args.no_wandb,
         project_name="speech-rag",
-        collate_fn=speech_collate_fn  # <--- CRITICAL for padding
+        collate_fn=speech_collate_fn,  # <--- CRITICAL for padding
+        config=config  # Pass config for wandb logging
     )
     
     # Train
@@ -175,7 +192,11 @@ def main():
         batch_size=config["training"]["batch_size"],
         save_steps=config["training"].get("save_steps", 1000),
         eval_steps=config["training"].get("eval_steps", 500),
-        resume_from=args.resume
+        resume_from=args.resume,
+        gradient_accumulation_steps=config["training"].get("gradient_accumulation_steps", 1),
+        early_stopping_patience=config["training"].get("early_stopping_patience"),
+        early_stopping_min_delta=config["training"].get("early_stopping_min_delta", 0.0),
+        log_batch_frequency=config["training"].get("log_batch_frequency", 1)
     )
     
     print("Training completed!")
