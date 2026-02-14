@@ -20,13 +20,14 @@ class SpeechAdapter(nn.Module):
     def __init__(
         self,
         input_dim: int = 1024,  # HuBERT-large hidden size
-        output_dim: int = 4096,  # E5-Mistral embedding dim
+        output_dim: int = 4096,  # Text encoder embedding dim (E5-Mistral: 4096, Qwen3-0.6B: 1024, Qwen3-4B: 2560)
         downsample_factor: int = 4
     ):
         """
         Args:
             input_dim: Input dimension from speech encoder (HuBERT)
-            output_dim: Output dimension matching text encoder (E5-Mistral)
+            output_dim: Output dimension matching text encoder 
+                       (E5-Mistral: 4096, Qwen3-Embedding-0.6B: 1024, Qwen3-Embedding-4B: 2560)
             downsample_factor: Temporal downsampling factor
         """
         super().__init__()

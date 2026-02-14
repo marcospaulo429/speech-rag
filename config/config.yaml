@@ -1,7 +1,10 @@
 models:
   # Text encoder model (HuggingFace model identifier)
-  # Opções: "Qwen/Qwen3-Embedding-0.6B" (1024 dim) ou "intfloat/e5-mistral-7b-instruct" (4096 dim)
-  text_encoder: "Qwen/Qwen3-Embedding-0.6B"
+  # Opções: 
+  #   - "Qwen/Qwen3-Embedding-0.6B" (1024 dim)
+  #   - "Qwen/Qwen3-Embedding-4B" (2560 dim)
+  #   - "intfloat/e5-mistral-7b-instruct" (4096 dim)
+  text_encoder: "Qwen/Qwen3-Embedding-4B"
   
   # Text encoder type (auto-detectado baseado no nome do modelo, mas pode ser especificado)
   # Opções: "e5" ou "qwen3" (geralmente não necessário, é auto-detectado)
@@ -15,7 +18,7 @@ models:
   
 training:
   # Batch size conforme paper
-  batch_size: 32
+  batch_size: 2
   
   # Learning rate conforme paper
   learning_rate: 5e-5

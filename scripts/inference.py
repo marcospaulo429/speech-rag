@@ -145,27 +145,46 @@ def main():
         device=device
     )
     
-    # Build or load index
-    if args.index and Path(args.index).exists():
-        print(f"Loading index from {args.index}...")
-        retriever.load_index(args.index)
-    elif args.audio_dir:
-        print(f"Building index from audio files in {args.audio_dir}...")
-        audio_dir = Path(args.audio_dir)
+    # Build or load index (sempre tenta reutilizar primeiro)
+    audio_dir_to_use = args.audio_dir
+    
+    # Gerar caminho padrão do índice se não fornecido
+    if not args.index and audio_dir_to_use:
+        # Usa o nome do diretório de áudio para criar nome do índice
+        audio_dir_name = Path(audio_dir_to_use).name
+        default_index_path = f"indices/{audio_dir_name}_index.faiss"
+        index_path = Path(default_index_path)
+    elif args.index:
+        index_path = Path(args.index)
+    else:
+        print("Error: Either --index or --audio-dir must be provided")
+        return
+    
+    # Sempre tenta carregar índice existente primeiro
+    if index_path.exists():
+        print(f"✓ Loading existing index from {index_path}...")
+        retriever.load_index(str(index_path))
+        print(f"  Index loaded with {retriever.index.ntotal} vectors")
+    elif audio_dir_to_use and Path(audio_dir_to_use).exists():
+        # Só constrói se não existir
+        print(f"Index not found at {index_path}. Building new index...")
+        print(f"Building index from audio files in {audio_dir_to_use}...")
+        audio_dir = Path(audio_dir_to_use)
         audio_files = list(audio_dir.glob("*.wav")) + list(audio_dir.glob("*.mp3")) + list(audio_dir.glob("*.flac"))
         
         if not audio_files:
-            print(f"No audio files found in {args.audio_dir}")
+            print(f"No audio files found in {audio_dir_to_use}")
             return
         
         print(f"Found {len(audio_files)} audio files")
         retriever.build_index(audio_files)
         
-        # Save index if path provided
-        if args.index:
-            retriever.save_index(args.index)
+        # Salva automaticamente para reutilização futura
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        retriever.save_index(str(index_path))
+        print(f"✓ Index saved to {index_path} for future reuse")
     else:
-        print("Error: Either --index or --audio-dir must be provided")
+        print(f"Error: Could not find index at {index_path} and audio_dir not provided or invalid")
         return
     
     # Search if query provided
